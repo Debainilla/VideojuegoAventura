@@ -4,9 +4,11 @@ A small text-free adventure game built with [Streamlit](https://streamlit.io).
 You are dropped into a randomly generated castle and have to collect
 **60 gold** without dying.
 
-The whole castle is always on screen. You can only walk into the rooms
-that are joined to the one you are standing in, so the game is really
-about choosing a route: which room is worth the risk of an enemy?
+The whole castle is always on screen, but under a **fog of war**: a room you
+have not found yet shows a question mark instead of what is inside it. You
+can only walk into the rooms joined to the one you are standing in, so the
+game is about exploring blind and choosing a route: which room is worth the
+risk of an enemy you cannot see yet?
 
 - **Treasures** are worth 20 to 40 gold and can only be collected once.
 - **Enemies** block their room and ask a maths problem. You have 20
@@ -19,6 +21,25 @@ about choosing a route: which room is worth the risk of an enemy?
   leaving the room empty.
 - Start with 20 health. Four mistakes in one room is death, because the
   enemy keeps asking until you succeed or fall.
+
+### Fog of war
+
+Rooms start unexplored. The one you are standing in is always visible;
+every other room shows `?` until you walk into it. That includes the
+enemies, so **you can no longer see a fight coming and route around it** —
+you find out the same way the gold does.
+
+### Walls
+
+Three rooms in every castle are solid walls. They are left out of the maze
+entirely, so they hold no passages and can never block the way to a
+treasure.
+
+You find one by walking into it. Because a wall has no passage, it is never
+a normal destination, so you may click any room that merely *touches* the
+one you are in: either a passage was hiding and you walk in, or it is stone
+and you bump into it. Bumping costs nothing — no health, no move — it just
+reveals the wall, and the button then locks for the rest of the run.
 
 ---
 
@@ -86,7 +107,7 @@ models/
     operation.py     one maths problem
     treasure.py      one pile of gold
     enemy.py         one enemy, with its name and damage
-    room.py          one square, and the three kinds it can be
+    room.py          one square, and the four kinds it can be
     castle.py        the maze: rooms, passages, and what is inside them
     player.py        health, gold, and where the player stands
 tests/
@@ -130,14 +151,24 @@ an image.
 
 ### Two details worth knowing
 
-**The map is a tree, built by a random depth-first search.** Every room
-is reachable from every other room by exactly one route, so the castle
-can never contain an unreachable treasure or a loop that wastes time.
-The map always holds exactly 4 treasure rooms and 3 enemy rooms, dealt
-from a fixed list rather than dice rolls, which is what guarantees a
+**The map is a tree, built by a random depth-first search.** Every *walkable*
+room is reachable from every other one by exactly one route, so the castle
+can never contain an unreachable treasure or a loop that wastes time. Walls
+are excluded from that tree, so the invariant is stated over the walkable
+rooms only. The map always holds exactly 4 treasure rooms and 3 enemy rooms,
+dealt from a fixed list rather than dice rolls, which is what guarantees a
 winnable castle. The room you start in is then emptied by **trading**
 its contents with an empty room, so making the start safe never quietly
 removes a treasure.
+
+**Walls are placed one at a time, and each one is checked before the next.**
+A row of walls can split a 4x4 grid in two, and the depth-first search only
+reaches the piece holding the starting room: a treasure stranded in the other
+piece would make the run impossible to win. Measured over random castles,
+that happened in **15% of them**. So a candidate wall that would disconnect
+the walkable area is put back and another is tried. The same check also
+rejects a wall ringed by other walls, which could never be discovered.
+Building the walls before the maze is what lets the search skip them.
 
 **The countdown subtracts from a deadline, it does not count down.**
 `Game.time_remaining()` returns `deadline - time.time()`. If the page is
@@ -165,6 +196,7 @@ Everything you would normally want to change is in `config.py`:
 | `TREASURE_GOLD_MIN` / `_MAX` | how much a treasure is worth |
 | `MAP_ROWS` / `MAP_COLUMNS` | the size of the castle |
 | `TREASURE_ROOMS` / `ENEMY_ROOMS` | how the rooms are filled |
+| `WALL_ROOMS` | how many rooms are solid walls |
 | `ANSWER_TIME_LIMIT` | seconds allowed to solve a problem |
 | `OPERAND_MIN` / `OPERAND_MAX` | how hard the maths is |
 | `TIMER_REFRESH_SECONDS` | how often the countdown redraws |

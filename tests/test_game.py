@@ -116,6 +116,17 @@ def treasure_castle(room_count=3):
     return castle
 
 
+def walled_castle():
+    """Return a two-room castle: an empty start, then a wall.
+
+    Room 1 touches room 0 in the grid but has no passage, which is the
+    exact shape of the bump: side by side, not connected.
+    """
+    castle = Castle(1, 2)
+    castle.get_room(1).place_wall()
+    return castle
+
+
 def meet_enemy():
     """Return a game with the player already facing an enemy."""
     game = Game(duel_castle())
@@ -283,23 +294,57 @@ def test_room_contents_appear_and_disappear():
 
 
 def test_room_icon_follows_the_contents():
-    """The map icon always shows what the room really holds."""
+    """Once found, the map icon always shows what the room holds.
+
+    Every room here is discovered first: an unexplored room shows a
+    question mark whatever it holds, which is the next test.
+    """
     empty = Room(0, 0, 0)
+    empty.discover()
     check("an empty room uses the empty icon",
           empty.icon == Config.ICON_EMPTY)
 
     treasure = Room(1, 0, 1)
     treasure.place_treasure()
+    treasure.discover()
     check("a treasure room uses the treasure icon",
           treasure.icon == Config.ICON_TREASURE)
 
     enemy_room = Room(2, 0, 2)
     enemy_room.place_enemy()
+    enemy_room.discover()
     check("an enemy room uses the enemy icon",
           enemy_room.icon == Config.ICON_ENEMY)
     enemy_room.remove_enemy()
     check("an emptied room goes back to the empty icon",
           enemy_room.icon == Config.ICON_EMPTY)
+
+    wall = Room(3, 0, 3)
+    wall.place_wall()
+    wall.discover()
+    check("a wall uses the wall icon", wall.icon == Config.ICON_WALL)
+
+
+def test_fog_hides_what_an_unexplored_room_holds():
+    """An unexplored room shows a question mark, not its contents."""
+    check("a room starts unexplored", not Room(0, 0, 0).discovered)
+
+    treasure = Room(1, 0, 1)
+    treasure.place_treasure()
+    check("fog hides a treasure", treasure.icon == Config.ICON_UNKNOWN)
+
+    enemy_room = Room(2, 0, 2)
+    enemy_room.place_enemy()
+    check("fog hides an enemy", enemy_room.icon == Config.ICON_UNKNOWN)
+
+    wall = Room(3, 0, 3)
+    wall.place_wall()
+    check("fog hides a wall", wall.icon == Config.ICON_UNKNOWN)
+
+    treasure.discover()
+    treasure.discover()
+    check("discovering is idempotent and then reveals the truth",
+          treasure.discovered and treasure.icon == Config.ICON_TREASURE)
 
 
 def test_room_connections_are_symmetric():
@@ -405,12 +450,16 @@ def test_starting_room_is_emptied_without_losing_content():
 
 
 def test_castle_is_fully_connected():
-    """Every room can be walked to from the starting room."""
+    """Every walkable room can be walked to from the starting room.
+
+    Walls are excluded: they hold no passages by design, so the maze
+    spans the walkable rooms only.
+    """
     unreachable = 0
     for _ in range(50):
         castle = Castle.generate_random()
         reached = castle.visited_count_from(Config.STARTING_ROOM)
-        if reached != castle.room_count:
+        if reached != castle.walkable_room_count:
             unreachable += 1
     check("50 generated castles are fully reachable", unreachable == 0)
 
@@ -434,13 +483,117 @@ def test_castle_connections_are_valid():
 
 
 def test_castle_is_a_tree():
-    """A maze of N rooms has exactly N-1 passages."""
+    """A maze of N walkable rooms has exactly N-1 passages."""
     castle = Castle.generate_random()
     passages = sum(
         len(room.connections) for room in castle.rooms
     ) // 2
-    check("the maze has one passage less than rooms",
-          passages == castle.room_count - 1)
+    check("the maze has one passage less than walkable rooms",
+          passages == castle.walkable_room_count - 1)
+
+
+# --- Castle: walls -------------------------------------------------
+
+def test_castle_has_exactly_the_configured_walls():
+    """Every castle has exactly ``WALL_ROOMS`` walls, never the start."""
+    wrong_count = 0
+    start_is_wall = 0
+    for _ in range(100):
+        castle = Castle.generate_random()
+        walls = castle.walls()
+        if len(walls) != Config.WALL_ROOMS:
+            wrong_count += 1
+        if castle.get_room(Config.STARTING_ROOM).is_wall():
+            start_is_wall += 1
+    check("100 castles hold the configured number of walls",
+          wrong_count == 0)
+    check("the starting room is never a wall", start_is_wall == 0)
+
+
+def test_walls_are_left_out_of_the_maze():
+    """A wall has no passages and holds nothing at all."""
+    leaks_passage = False
+    holds_loot = False
+    for _ in range(100):
+        castle = Castle.generate_random()
+        for wall_id in castle.walls():
+            wall = castle.get_room(wall_id)
+            if wall.connections:
+                leaks_passage = True
+            if wall.has_treasure() or wall.has_live_enemy():
+                holds_loot = True
+    check("no wall is wired into the maze", not leaks_passage)
+    check("no wall holds treasure or an enemy", not holds_loot)
+
+
+def test_every_wall_can_be_bumped_into():
+    """No wall is walled in, and walls never cut the map in two.
+
+    Both properties are what make walls fair. A ring of walls would
+    strand a treasure the player could never reach, making the run
+    unwinnable, and a wall surrounded only by other walls could never be
+    discovered at all.
+    """
+    stranded = 0
+    unreachable_wall = 0
+    for _ in range(200):
+        castle = Castle.generate_random()
+        if castle.visited_count_from(Config.STARTING_ROOM) != \
+                castle.walkable_room_count:
+            stranded += 1
+        for wall_id in castle.walls():
+            touching = [
+                other_id
+                for other_id in castle.room_ids()
+                if castle.is_side_by_side(wall_id, other_id)
+                and not castle.get_room(other_id).is_wall()
+            ]
+            if not touching:
+                unreachable_wall += 1
+    check("walls never strand part of the castle", stranded == 0)
+    check("every wall has a walkable neighbour", unreachable_wall == 0)
+
+
+def test_walls_do_not_change_the_fixed_content_counts():
+    """Walls take a room's place without eating a treasure or an enemy."""
+    treasures = 0
+    enemies = 0
+    for _ in range(50):
+        castle = Castle.generate_random()
+        treasures += sum(
+            1 for room in castle.rooms
+            if room.type is RoomType.TREASURE
+        )
+        enemies += sum(
+            1 for room in castle.rooms if room.type is RoomType.ENEMY
+        )
+    check("50 castles still hold 4 treasures each",
+          treasures == 50 * Config.TREASURE_ROOMS)
+    check("50 castles still hold 3 enemies each",
+          enemies == 50 * Config.ENEMY_ROOMS)
+
+
+def test_a_castle_with_walls_is_still_winnable():
+    """The gold goal stays reachable even with walls in the way."""
+    reachable_gold = 0
+    for _ in range(200):
+        castle = Castle.generate_random()
+        reached = set()
+        stack = [Config.STARTING_ROOM]
+        while stack:
+            for other in castle.neighbours_of(stack.pop()):
+                if other not in reached:
+                    reached.add(other)
+                    stack.append(other)
+        gold = sum(
+            room.treasure.amount()
+            for room in castle.rooms
+            if room.room_id in reached and room.has_treasure()
+        )
+        if gold >= Config.GOLD_GOAL:
+            reachable_gold += 1
+    check("200 walled castles can still reach the gold goal",
+          reachable_gold == 200)
 
 
 # --- Game: movement ----------------------------------------------
@@ -454,13 +607,30 @@ def test_game_rejects_illegal_moves():
     check("a room that does not exist is refused",
           "does not exist" in game.move_to(9999))
 
+    # Picked by shape, not at random: a wall would be refused for a
+    # different reason and would test nothing here.
     far_away = next(
         room_id
         for room_id in castle.room_ids()
-        if not castle.get_room(room_id).is_adjacent_to(here)
+        if not castle.is_side_by_side(here, room_id)
+        and not castle.get_room(room_id).is_adjacent_to(here)
     )
-    check("a room with no passage is refused",
+    check("a room far away is refused",
           "no passage" in game.move_to(far_away))
+
+    blocked_wall = next(
+        (
+            room_id
+            for room_id in castle.room_ids()
+            if castle.is_side_by_side(here, room_id)
+            and not castle.get_room(room_id).is_wall()
+            and not castle.get_room(room_id).is_adjacent_to(here)
+        ),
+        None,
+    )
+    if blocked_wall is not None:
+        check("a side-by-side room with no passage is refused",
+              "no passage" in game.move_to(blocked_wall))
 
     neighbour = castle.neighbours_of(here)[0]
     check("a real passage is allowed",
@@ -469,12 +639,133 @@ def test_game_rejects_illegal_moves():
           game.player.position == neighbour)
 
 
+# --- Game: fog of war ---------------------------------------------
+
+def test_a_run_starts_with_only_the_starting_room_found():
+    """The castle opens under fog: one known room out of sixteen."""
+    game = Game.new_game()
+    castle = game.castle
+    found = [room.room_id for room in castle.rooms if room.discovered]
+
+    check("the starting room is visible at once",
+          castle.get_room(Config.STARTING_ROOM).discovered)
+    check("every other room is still hidden",
+          found == [Config.STARTING_ROOM])
+    check("the counter agrees", game.discovered_count == 1)
+
+
+def test_walking_into_a_room_reveals_it():
+    """Entering a room lifts the fog on that room only."""
+    game = Game(treasure_castle(room_count=3))
+    check("the next room starts hidden",
+          not game.castle.get_room(1).discovered)
+
+    game.move_to(1)
+    check("entering reveals the room",
+          game.castle.get_room(1).discovered)
+    check("the room after it stays hidden",
+          not game.castle.get_room(2).discovered)
+    check("the counter went up by one", game.discovered_count == 2)
+
+
+def test_fog_never_leaks_a_treasure():
+    """No unexplored treasure shows its icon or its room as found."""
+    leaked = 0
+    for _ in range(50):
+        game = Game.new_game()
+        castle = game.castle
+        for room in castle.rooms:
+            if room.has_treasure() and (
+                room.discovered
+                or room.icon != Config.ICON_UNKNOWN
+            ):
+                leaked += 1
+    check("no unexplored treasure leaks through the map", leaked == 0)
+
+
+def test_the_log_opens_without_revealing_anything():
+    """Nothing about the unexplored castle is in the log yet.
+
+    Only the single welcome line is there: no room has been reported and
+    no enemy named. (The welcome itself mentions gold, because it tells
+    the player what the goal is.)
+    """
+    game = Game.new_game()
+    joined = " ".join(game.log).lower()
+    check("no room has been reported yet", "room" not in joined)
+    check("no treasure has been reported yet", "you found" not in joined)
+    check("no enemy has been named yet",
+          not any(name.lower() in joined for name in Config.ENEMY_NAMES))
+
+
+# --- Game: bumping into a wall ------------------------------------
+
+def test_bumping_a_wall_keeps_the_player_in_place():
+    """Walking into stone reveals it and costs nothing."""
+    game = Game(walled_castle())
+    health = game.player.health
+    visited = game.rooms_visited
+
+    check("the wall starts hidden", not game.castle.get_room(1).discovered)
+
+    message = game.move_to(1)
+
+    check("the message says it is a wall", "wall" in message.lower())
+    check("the player did not move", game.player.position == 0)
+    check("the wall is now discovered",
+          game.castle.get_room(1).discovered)
+    check("it does not count as a room entered",
+          game.rooms_visited == visited)
+    check("it costs no health", game.player.health == health)
+    check("no fight was triggered", not game.in_combat)
+    check("the walls-found counter went up", game.walls_found == 1)
+
+
+def test_a_wall_can_be_bumped_into_again():
+    """A wall already found says so again and still blocks the way."""
+    game = Game(walled_castle())
+    game.move_to(1)
+    message = game.move_to(1)
+    check("the same wall still stops the player",
+          game.player.position == 0)
+    check("and still reports itself as a wall",
+          "wall" in message.lower())
+
+
+def test_a_wall_far_away_is_not_a_bump():
+    """Side by side is required: a distant wall is just unreachable."""
+    castle = Castle(2, 2)
+    castle.get_room(3).place_wall()  # not touching room 0
+    game = Game(castle)
+    message = game.move_to(3)
+    check("a distant wall is not discovered",
+          not castle.get_room(3).discovered)
+    check("a distant wall is refused as unreachable",
+          "no passage" in message)
+
+
+def test_movement_is_blocked_by_a_wall_during_combat():
+    """Combat still comes first, even with a wall to bump into."""
+    castle = Castle(1, 3)
+    join(castle, 0, 1)
+    castle.get_room(1).place_enemy()
+    castle.get_room(2).place_wall()
+    game = Game(castle)
+    game.move_to(1)
+
+    message = game.move_to(2)
+    check("the wall cannot be bumped during a fight",
+          "Solve the problem" in message)
+    check("and it stays hidden while the fight is on",
+          not castle.get_room(2).discovered)
+
+
 def test_player_can_walk_the_whole_maze():
-    """Every room really is reachable by playing normally."""
+    """Every walkable room really is reachable by playing normally."""
     game = Game.new_game()
     reached = game.castle.visited_count_from(game.player.position)
-    check("the starting position reaches every room",
-          reached == game.castle.room_count)
+    check("the starting position reaches every walkable room",
+          reached == game.castle.walkable_room_count)
 
 
 # --- Game: treasure ----------------------------------------------
@@ -664,40 +955,22 @@ def test_ten_plays_can_be_created():
 
 # --- Runner -------------------------------------------------------
 
-TESTS = [
-    test_operation_text,
-    test_subtraction_is_never_negative,
-    test_operation_answers,
-    test_operation_result_matches_the_text,
-    test_treasure,
-    test_enemy,
-    test_player,
-    test_room_starts_empty,
-    test_room_contents_appear_and_disappear,
-    test_room_icon_follows_the_contents,
-    test_room_connections_are_symmetric,
-    test_room_swaps_what_it_holds,
-    test_castle_shape,
-    test_castle_contents,
-    test_starting_room_is_emptied_without_losing_content,
-    test_castle_is_fully_connected,
-    test_castle_connections_are_valid,
-    test_castle_is_a_tree,
-    test_game_rejects_illegal_moves,
-    test_player_can_walk_the_whole_maze,
-    test_treasure_is_collected_once,
-    test_room_with_nothing_says_so,
-    test_entering_an_enemy_room_starts_a_fight,
-    test_wrong_answer_costs_health_and_a_new_problem,
-    test_correct_answer_defeats_the_enemy,
-    test_no_combat_without_an_enemy,
-    test_timeout_costs_health_and_the_enemy_flees,
-    test_timeout_is_a_no_op_outside_combat,
-    test_movement_is_blocked_during_combat,
-    test_running_out_of_health_is_a_defeat,
-    test_reaching_the_gold_goal_is_a_victory,
-    test_ten_plays_can_be_created,
-]
+def _discover_tests():
+    """Return every test function in this file, in the order written.
+
+    Discovered automatically on purpose. An explicit hand-written list
+    silently skips any test that was added but not registered, and a
+    suite that reports success while quietly skipping tests is worse
+    than no suite at all.
+    """
+    return [
+        value
+        for name, value in list(globals().items())
+        if name.startswith("test_") and callable(value)
+    ]
+
+
+TESTS = _discover_tests()
 
 
 def main():

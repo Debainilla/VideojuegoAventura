@@ -76,47 +76,79 @@ def submit_answer():
 def draw_map(game):
     """Draw the whole castle as a grid of buttons.
 
-    The map is always fully visible: the player can see every room, and
-    can only click the ones joined to the room they stand in. Nothing is
-    ever hidden, so the puzzle is choosing the route, not remembering
-    the layout.
+    The grid is always fully drawn, so the shape of the castle stays
+    readable, but **the contents of a room stay hidden until it is
+    found**: an unexplored room shows a question mark. Two kinds of
+    button are live:
+
+    * every room joined to the one the player stands in, because there
+      is a passage to walk through;
+    * every *unexplored* room that merely touches it, because the player
+      has to be allowed to try. That attempt is what discovers a wall.
+
+    Once a wall has been found its button is disabled, so the map
+    settles down into what is actually known.
     """
     st.subheader("Castle map")
-    reachable = set(game.castle.neighbours_of(game.player.position))
+    castle = game.castle
+    position = game.player.position
+    reachable = set(castle.neighbours_of(position))
     can_walk = game.can_move()
 
     for row in range(Config.MAP_ROWS):
         columns = st.columns(Config.MAP_COLUMNS)
         for column in range(Config.MAP_COLUMNS):
-            room_id = game.castle.id_at(row, column)
-            room = game.castle.get_room(room_id)
+            room_id = castle.id_at(row, column)
+            room = castle.get_room(room_id)
             with columns[column]:
-                draw_room_button(game, room, room_id, reachable, can_walk)
+                draw_room_button(
+                    game, room, room_id, reachable, can_walk
+                )
 
 
 def draw_room_button(game, room, room_id, reachable, can_walk):
     """Draw the single button for one room of the map.
 
-    Four cases, in the order the player cares about:
+    Six cases, in the order the player cares about:
 
     * the room they are standing in (pressed, cannot be clicked);
-    * a room with a passage to it (clickable);
-    * a real room with no passage (visible, but locked);
+    * a room with a passage to it (clickable, walk in);
+    * an unexplored room touching them (clickable, try to go that way,
+      which is how a wall gets discovered);
+    * a wall they have already found (shown, locked);
+    * a room they know about but cannot reach from here (locked);
     * anything else would be a bug, so it is reported rather than
       hidden.
+
+    The icon comes from ``room.icon``, which already applies the fog of
+    war, so this function never has to think about what a room holds.
     """
-    if room_id == game.player.position:
+    castle = game.castle
+    here = game.player.position
+
+    if room_id == here:
         button_type, label, icon = "primary", "You", Config.ICON_PLAYER
         clicked, help_text = True, "This is where you are."
     elif room_id in reachable and can_walk:
         button_type, label, icon = "secondary", str(room_id), room.icon
         clicked, help_text = False, "Walk through here."
-    elif game.castle.has_room(room_id):
+    elif can_walk and castle.is_side_by_side(here, room_id) \
+            and not room.discovered:
+        # Undiscovered and touching: the player may try to go there.
+        # Either a passage was hiding and they walk in, or it is a wall
+        # and they learn that instead.
+        button_type, label, icon = "secondary", str(room_id), room.icon
+        clicked, help_text = False, "Try to go that way."
+    elif room.is_wall() and room.discovered:
+        button_type, label, icon = "secondary", str(room_id), room.icon
+        clicked = True
+        help_text = "A solid wall. You already found it."
+    elif castle.has_room(room_id):
         button_type, label, icon = "secondary", str(room_id), room.icon
         clicked = True
         help_text = "There is no passage from where you stand."
     else:
-        button_type, label, icon = "secondary", "?", Config.ICON_EMPTY
+        button_type, label, icon = "secondary", "?", Config.ICON_UNKNOWN
         clicked, help_text = True, "This room does not exist."
 
     st.button(
@@ -170,7 +202,7 @@ def draw_countdown():
 def draw_status(game):
     """Draw the row of numbers that describes the run."""
     gold_left = max(0, Config.GOLD_GOAL - game.player.gold)
-    columns = st.columns(4)
+    columns = st.columns(5)
     columns[0].metric(
         "Health", f"{game.player.health}",
         delta=f"-{Config.ENEMY_DAMAGE} per mistake",
@@ -195,6 +227,18 @@ def draw_status(game):
         "Enemies beaten", str(game.enemies_defeated),
         help="How many enemies you have defeated.",
         icon=Config.ICON_ENEMY,
+        border=True,
+    )
+    columns[4].metric(
+        "Explored",
+        f"{game.discovered_count}/{game.castle.room_count}",
+        delta=f"{game.walls_found} wall(s) found",
+        delta_color="off",
+        help=(
+            "How much of the castle you have uncovered. Walls count as "
+            "explored once you have bumped into them."
+        ),
+        icon=Config.ICON_UNKNOWN,
         border=True,
     )
 
@@ -239,6 +283,9 @@ def draw_end_of_run(game):
 
     st.markdown(
         f"- Rooms entered: **{game.rooms_visited}**\n"
+        f"- Rooms explored: **{game.discovered_count}** of "
+        f"{game.castle.room_count}\n"
+        f"- Walls found: **{game.walls_found}**\n"
         f"- Enemies beaten: **{game.enemies_defeated}**\n"
         f"- Gold gathered: **{game.player.gold}**"
     )
@@ -262,7 +309,8 @@ def main():
     st.caption(
         f"Collect {Config.GOLD_GOAL} gold to win. You start with "
         f"{Config.STARTING_HEALTH} health, and every wrong answer in a "
-        f"fight costs {Config.ENEMY_DAMAGE}."
+        f"fight costs {Config.ENEMY_DAMAGE}. Rooms you have not found "
+        f"yet show a question mark, and some rooms are solid walls."
     )
 
     st.button(

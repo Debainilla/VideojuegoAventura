@@ -132,31 +132,157 @@ def test_the_page_loads_with_no_error():
     assert not app.exception, app.exception
     assert app.title[0].value == "Castle Adventure"
     assert [metric.label for metric in app.metric] == [
-        "Health", "Gold", "Room", "Enemies beaten",
+        "Health", "Gold", "Room", "Enemies beaten", "Explored",
     ]
     assert app.metric[0].value == str(Config.STARTING_HEALTH)
     assert app.metric[1].value == "0"
+    assert app.metric[4].value == (
+        f"1/{Config.MAP_ROWS * Config.MAP_COLUMNS}"
+    )
 
 
 @test
 def test_the_whole_map_is_always_drawn():
-    """All 16 rooms are on the page, and only reachable ones are live."""
+    """All 16 rooms are on the page, and only nearby ones are live.
+
+    The grid itself is always fully drawn. What changes with the fog of
+    war is which buttons are live: a room is clickable when there is a
+    passage to it, or when it is unexplored and merely touching, because
+    the player has to be able to try their luck and find a wall.
+    """
     app = start()
     game = game_of(app)
+    castle = game.castle
     expected = Config.MAP_ROWS * Config.MAP_COLUMNS
     rooms = [b for b in app.button if b.key.startswith("room_")]
 
     assert len(rooms) == expected, [b.key for b in rooms]
 
-    reachable = set(game.castle.neighbours_of(game.player.position))
+    here = game.player.position
+    reachable = set(castle.neighbours_of(here))
+    touchable = {
+        room_id
+        for room_id in castle.room_ids()
+        if castle.is_side_by_side(here, room_id)
+        and not castle.get_room(room_id).discovered
+    }
     clickable = {b.key for b in rooms if not b.disabled}
-    assert clickable == {f"room_{i}" for i in reachable}, clickable
+
+    assert clickable == {f"room_{i}" for i in reachable | touchable}, (
+        clickable
+    )
+    # Whatever is live must at least be next door: no jumping across the
+    # castle, and no reaching through the fog.
+    for key in clickable:
+        room_id = int(key.removeprefix("room_"))
+        assert room_id == here or castle.is_side_by_side(here, room_id)
 
     # The room the player stands in is shown as pressed and cannot be
     # clicked, so the page never leaves the player unsure where they are.
-    here = app.button(key=f"room_{game.player.position}")
-    assert here.disabled is True
-    assert here.label == "You"
+    here_button = app.button(key=f"room_{here}")
+    assert here_button.disabled is True
+    assert here_button.label == "You"
+
+
+@test
+def test_a_new_game_starts_under_the_fog():
+    """Every room but the one you stand in shows a question mark."""
+    app = start()
+    castle = game_of(app).castle
+    here = game_of(app).player.position
+
+    unknown = [
+        b for b in app.button
+        if b.key.startswith("room_")
+        and int(b.key.removeprefix("room_")) != here
+    ]
+    assert unknown, "the map drew no other rooms"
+    for button in unknown:
+        assert button.icon == Config.ICON_UNKNOWN, (
+            button.key, button.icon
+        )
+
+
+@test
+def test_fog_lifts_only_for_the_room_you_walk_into():
+    """Entering a room reveals it and leaves the neighbours mysterious."""
+    app = start()
+    castle = game_of(app).castle
+    neighbour = castle.neighbours_of(game_of(app).player.position)[0]
+
+    click_room(app, neighbour)
+
+    assert app.button(key=f"room_{neighbour}").icon != Config.ICON_UNKNOWN
+    for room in castle.rooms:
+        if not room.discovered:
+            assert app.button(
+                key=f"room_{room.room_id}"
+            ).icon == Config.ICON_UNKNOWN
+
+
+def stand_next_to_a_wall():
+    """Return a page where the player can bump into a wall, and its id.
+
+    Walks to a known walkable room that touches a wall, solving anything
+    on the way. Fresh castles are tried until that works, because the
+    walk can end the run early on enough treasure or too many fights.
+    """
+    for _ in range(40):
+        app = start()
+        castle = game_of(app).castle
+        for wall in castle.rooms:
+            if not wall.is_wall():
+                continue
+            anchor = next(
+                (
+                    room.room_id
+                    for room in castle.rooms
+                    if not room.is_wall()
+                    and castle.is_side_by_side(wall.room_id, room.room_id)
+                ),
+                None,
+            )
+            if anchor is None:
+                continue
+            walk_to(app, anchor)
+            game = game_of(app)
+            if (game.state is GameState.PLAYING
+                    and not game.in_combat
+                    and game.player.position == anchor):
+                return app, wall.room_id
+    raise AssertionError("no wall could be reached in 40 tries")
+
+
+@test
+def test_bumping_a_wall_from_the_page_stays_put_and_reveals_it():
+    """Clicking a wall leaves the player where they were, and finds it."""
+    app, wall_id = stand_next_to_a_wall()
+    game = game_of(app)
+    before = game.player.position
+    visited = game.rooms_visited
+    health = game.player.health
+
+    button = app.button(key=f"room_{wall_id}")
+    assert not button.disabled, "a wall was not clickable"
+    assert button.icon == Config.ICON_UNKNOWN, "the wall was not hidden"
+
+    button.click().run()
+
+    assert not app.exception, app.exception
+    game = game_of(app)
+    assert game.player.position == before, "the player moved into a wall"
+    assert game.rooms_visited == visited
+    assert game.player.health == health
+    assert game.castle.get_room(wall_id).discovered
+    assert game.walls_found == 1
+
+    said = " ".join(info.value for info in app.info).lower()
+    assert "wall" in said, said
+
+    # Now that it is found, the button locks and shows what it is.
+    found = app.button(key=f"room_{wall_id}")
+    assert found.disabled is True
+    assert found.icon == Config.ICON_WALL, found.icon
 
 
 @test

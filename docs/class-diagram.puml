@@ -29,6 +29,7 @@ enum RoomType {
     EMPTY
     TREASURE
     ENEMY
+    WALL
 }
 
 ' --- Constants ------------------------------------------------------
@@ -44,6 +45,7 @@ class "Config" as Config <<namespace>> {
     MAP_COLUMNS = 4
     TREASURE_ROOMS = 4
     ENEMY_ROOMS = 3
+    WALL_ROOMS = 3
     STARTING_ROOM = 0
     ANSWER_TIME_LIMIT = 20
     TIMER_REFRESH_SECONDS = 0.5
@@ -68,6 +70,8 @@ class Game {
     + in_combat() : bool
     + log() : list~str~
     + rooms_visited() : int
+    + discovered_count() : int
+    + walls_found() : int
     + enemies_defeated() : int
     + current_room() : Room
     + can_move() : bool
@@ -75,6 +79,7 @@ class Game {
     + move_to(room_id) : str
     + submit_answer(answer) : str
     + register_timeout() : str
+    - _bump_into_wall(wall : Room) : str
     - _resolve_room() : str
     - _start_combat(enemy) : str
     - _defeat_enemy(enemy) : str
@@ -109,6 +114,7 @@ class Castle {
     + rows() : int
     + columns() : int
     + room_count() : int
+    + walkable_room_count() : int
     + rooms() : list~Room~
     + room_ids() : list~int~
     + generate_random() {static} : Castle
@@ -116,7 +122,12 @@ class Castle {
     + get_room(room_id) : Room
     + has_room(room_id) : bool
     + neighbours_of(room_id) : list~int~
+    + is_side_by_side(room_id, other_id) : bool
+    + walls() : list~int~
     + visited_count_from(start_id) : int
+    - _choose_walls() : int
+    - _every_wall_can_be_bumped() : bool
+    - _walkable_area_is_connected() : bool
     - _build_maze() : void
     - _unvisited_neighbours(room_id, visited) : list~int~
     - _deal_contents() : void
@@ -131,6 +142,7 @@ class Room {
     - _connections : list~int~
     - _treasure : Treasure
     - _enemy : Enemy
+    - _discovered : bool
     + __init__(room_id, row, column)
     + room_id() : int
     + row() : int
@@ -143,12 +155,18 @@ class Room {
     + has_live_enemy() : bool
     + place_treasure() : void
     + place_enemy() : void
+    + place_wall() : void
+    + place_empty() : void
+    + is_wall() : bool
     + remove_treasure() : void
     + remove_enemy() : void
     + swap_contents_with(other) : void
     + connect_to(other_id) : void
     + is_adjacent_to(other_id) : bool
+    + is_side_by_side(other : Room) : bool
     + connections() : list~int~
+    + discovered() : bool
+    + discover() : void
     - _refresh_type() : void
 }
 

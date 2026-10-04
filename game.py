@@ -49,6 +49,9 @@ class Game:
         self._log = ["Welcome to the castle! Find the gold and stay alive."]
         self._rooms_visited = 1
         self._enemies_defeated = 0
+        # You can always see the room you are standing in, so the run
+        # never opens on a question mark.
+        self._castle.get_room(Config.STARTING_ROOM).discover()
 
     @staticmethod
     def new_game():
@@ -88,6 +91,26 @@ class Game:
         return self._rooms_visited
 
     @property
+    def discovered_count(self):
+        """Return how many rooms the player has found so far.
+
+        Counts rooms found by walking into them *and* rooms found by
+        bumping into a wall, which is how exploration progress is shown
+        in the interface.
+        """
+        return sum(
+            1 for room in self._castle.rooms if room.discovered
+        )
+
+    @property
+    def walls_found(self):
+        """Return how many wall rooms the player has bumped into."""
+        return sum(
+            1 for room in self._castle.rooms
+            if room.is_wall() and room.discovered
+        )
+
+    @property
     def enemies_defeated(self):
         """Return how many enemies the player has beaten."""
         return self._enemies_defeated
@@ -116,10 +139,20 @@ class Game:
     def move_to(self, room_id):
         """Try to walk into ``room_id`` and return a message.
 
-        The guards below are the safety net that stops the player
-        leaving the castle. The interface already disables unreachable
-        buttons, but a rule enforced in only one place is a rule that
-        can be bypassed.
+        Three outcomes, in the order they are checked:
+
+        * a passage leads there: the player moves in and the room is
+          revealed;
+        * it is a wall: the player stays exactly where they are and the
+          wall is revealed instead;
+        * anything else: refused.
+
+        The wall case is checked *before* the passage test, so a wall is
+        unwalkable even if the maze were ever to hand it a passage.
+        Those guards are the safety net that stops the player leaving
+        the castle. The interface already disables impossible buttons,
+        but a rule enforced in only one place is a rule that can be
+        bypassed.
         """
         if self._state is not GameState.PLAYING:
             return "The run is already over."
@@ -130,12 +163,35 @@ class Game:
         if not self._castle.has_room(room_id):
             return "That room does not exist."
 
-        if not self.current_room().is_adjacent_to(room_id):
+        target = self._castle.get_room(room_id)
+        current = self.current_room()
+
+        if (target.is_wall()
+                and self._castle.is_side_by_side(current.room_id, room_id)):
+            return self._bump_into_wall(target)
+
+        if not current.is_adjacent_to(room_id):
             return "There is no passage that way."
 
         self._player.move_to(room_id)
         self._rooms_visited += 1
+        target.discover()
         return self._resolve_room()
+
+    def _bump_into_wall(self, wall):
+        """Walk into ``wall``, fail, and reveal it. Returns a message.
+
+        Nothing else happens: the player does not move, the room does
+        not count as visited, and no health is lost. Bumping into stone
+        is how a wall gets discovered.
+        """
+        wall.discover()
+        message = (
+            f"Room {wall.room_id} is a solid wall. You cannot go "
+            f"past it, but now you know it is there."
+        )
+        self._log_message(message)
+        return message
 
     # --- What happens when you enter a room -----------------------
 

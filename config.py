@@ -45,6 +45,10 @@ class Config:
     MAP_COLUMNS = 4
     TREASURE_ROOMS = 4
     ENEMY_ROOMS = 3
+    # How many rooms are solid walls. Walls are left out of the maze
+    # altogether, so they can never block the way to a treasure and the
+    # run stays winnable whatever this number is.
+    WALL_ROOMS = 3
     STARTING_ROOM = 0
 
     # --- Maths problem --------------------------------------------
@@ -65,3 +69,7 @@ class Config:
     ICON_TREASURE = ":material/diamond:"
     ICON_ENEMY = ":material/sports_martial_arts:"
     ICON_PLAYER = ":material/person_pin_circle:"
+    ICON_WALL = ":material/wallpaper:"
+    # Shown on a room the player has not explored yet: the cell is
+    # visible, but what is inside it is not.
+    ICON_UNKNOWN = ":material/question_mark:"

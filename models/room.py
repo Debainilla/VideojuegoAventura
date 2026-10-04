@@ -1,4 +1,4 @@
-"""A single cell of the castle, and the three kinds it can be."""
+"""A single cell of the castle, and the four kinds it can be."""
 
 from enum import Enum
 
@@ -8,16 +8,21 @@ from models.treasure import Treasure
 
 
 class RoomType(Enum):
-    """The three kinds of room the castle is built from.
+    """The four kinds of room the castle is built from.
 
     ``EMPTY`` covers both an untouched room and one whose treasure was
     taken or whose enemy left: once a room has been dealt with it goes
     back to ``EMPTY`` so the map never shows a solved room twice.
+
+    ``WALL`` is different from ``EMPTY``: it is not "nothing here" but
+    "solid stone here". A wall room can never be entered, it is left out
+    of the maze, and it holds neither treasure nor enemy.
     """
 
     EMPTY = "empty"
     TREASURE = "treasure"
     ENEMY = "enemy"
+    WALL = "wall"
 
 
 class Room:
@@ -30,7 +35,11 @@ class Room:
     """
 
     def __init__(self, room_id, row, column):
-        """Create an empty room at the given grid position."""
+        """Create an empty, unexplored room at the given grid position.
+
+        ``_discovered`` starts False: this is the fog of war. A room only
+        becomes visible once the player walks into it or bumps into it.
+        """
         self._id = room_id
         self._row = row
         self._column = column
@@ -38,6 +47,7 @@ class Room:
         self._connections = []
         self._treasure = None
         self._enemy = None
+        self._discovered = False
 
     # --- Identity -------------------------------------------------
 
@@ -91,6 +101,35 @@ class Room:
         self._enemy = Enemy.create_random()
         self._type = RoomType.ENEMY
 
+    def place_wall(self):
+        """Turn this room into solid stone.
+
+        Called before the maze is built, so the wall is already standing
+        when the depth-first search picks its passages, which is what
+        keeps it out of the maze.
+        """
+        self._treasure = None
+        self._enemy = None
+        self._type = RoomType.WALL
+
+    def place_empty(self):
+        """Strip this room back to bare, walkable floor.
+
+        The undo for :meth:`place_wall`: the castle generator raises a
+        candidate wall, checks it did not cut the map in two, and puts
+        the room back if it did.
+        """
+        self._treasure = None
+        self._enemy = None
+        self._type = RoomType.EMPTY
+
+    def is_wall(self):
+        """Return True when this room is a solid wall.
+
+        A wall can never be entered, no matter what the passages say.
+        """
+        return self._type is RoomType.WALL
+
     def remove_treasure(self):
         """Take the gold away and turn the room into an empty one."""
         self._treasure = None
@@ -115,7 +154,13 @@ class Room:
         other._refresh_type()
 
     def _refresh_type(self):
-        """Set the type from what the room currently holds."""
+        """Set the type from what the room currently holds.
+
+        A wall stays a wall: it is stone, not a container, so working
+        the type out from its contents must never overwrite it.
+        """
+        if self.is_wall():
+            return
         if self.has_live_enemy():
             self._type = RoomType.ENEMY
         elif self.has_treasure():
@@ -138,14 +183,49 @@ class Room:
     def is_adjacent_to(self, other_id):
         """Return True when there is a passage to ``other_id``.
 
-        This is the check the engine uses to refuse illegal moves.
+        This is the check the engine uses to decide whether a move
+        actually takes the player somewhere.
         """
         return other_id in self._connections
+
+    def is_side_by_side(self, other):
+        """Return True when ``other`` is a grid neighbour of this room.
+
+        This is a *weaker* question than :meth:`is_adjacent_to`: it only
+        asks whether the two cells touch, not whether a passage joins
+        them. The difference is what makes walls work:
+
+        * a passage neighbour  -> the player walks in;
+        * a side-by-side wall  -> the player bumps into it and stays put;
+        * side by side, no passage, not a wall -> a solid castle wall
+          between two rooms, and there is nothing to discover.
+
+        It takes a :class:`Room` rather than an id on purpose: turning
+        ``room_id`` back into a ``(row, column)`` pair needs to know how
+        many columns the grid has, and only the castle knows that.
+
+        Kept separate from ``is_adjacent_to`` on purpose. Folding the two
+        together would quietly turn every plain castle wall into a room
+        the player could walk into.
+        """
+        return (abs(self._row - other.row)
+                + abs(self._column - other.column)) == 1
 
     @property
     def connections(self):
         """Return a copy of the list of connected room ids."""
         return list(self._connections)
+
+    # --- Fog of war -----------------------------------------------
+
+    @property
+    def discovered(self):
+        """Return True once the player has found this room."""
+        return self._discovered
+
+    def discover(self):
+        """Reveal this room. Doing it twice changes nothing."""
+        self._discovered = True
 
     # --- Interface ------------------------------------------------
 
@@ -155,7 +235,15 @@ class Room:
 
         Streamlit ships the Material Symbols font, so a
         ``":material/name:"`` string renders as a real icon.
+
+        Fog of war comes first: an unexplored room shows a question mark
+        whatever it holds, so the icon can never leak a treasure or an
+        enemy the player has not met yet.
         """
+        if not self._discovered:
+            return Config.ICON_UNKNOWN
+        if self.is_wall():
+            return Config.ICON_WALL
         if self.has_live_enemy():
             return Config.ICON_ENEMY
         if self.has_treasure():

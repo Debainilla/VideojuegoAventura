@@ -23,6 +23,8 @@ classDiagram
         +in_combat() bool
         +log() list~str~
         +rooms_visited() int
+        +discovered_count() int
+        +walls_found() int
         +enemies_defeated() int
         +current_room() Room
         +can_move() bool
@@ -30,6 +32,7 @@ classDiagram
         +move_to(room_id) str
         +submit_answer(answer) str
         +register_timeout() str
+        -_bump_into_wall(wall) str
         -_resolve_room() str
         -_start_combat(enemy) str
         -_defeat_enemy(enemy) str
@@ -69,6 +72,7 @@ classDiagram
         +rows() int
         +columns() int
         +room_count() int
+        +walkable_room_count() int
         +rooms() list~Room~
         +room_ids() list~int~
         +generate_random()$ Castle
@@ -76,7 +80,12 @@ classDiagram
         +get_room(room_id) Room
         +has_room(room_id) bool
         +neighbours_of(room_id) list~int~
+        +is_side_by_side(room_id, other_id) bool
+        +walls() list~int~
         +visited_count_from(start_id) int
+        -_choose_walls() int
+        -_every_wall_can_be_bumped() bool
+        -_walkable_area_is_connected() bool
         -_build_maze() void
         -_unvisited_neighbours(room_id, visited) list~int~
         -_deal_contents() void
@@ -91,6 +100,7 @@ classDiagram
         -list~int~ _connections
         -Treasure _treasure
         -Enemy _enemy
+        -bool _discovered
         +__init__(room_id, row, column)
         +room_id() int
         +row() int
@@ -103,12 +113,18 @@ classDiagram
         +has_live_enemy() bool
         +place_treasure() void
         +place_enemy() void
+        +place_wall() void
+        +place_empty() void
+        +is_wall() bool
         +remove_treasure() void
         +remove_enemy() void
         +swap_contents_with(other) void
         +connect_to(other_id) void
         +is_adjacent_to(other_id) bool
+        +is_side_by_side(other) bool
         +connections() list~int~
+        +discovered() bool
+        +discover() void
         -_refresh_type() void
     }
 
@@ -117,6 +133,7 @@ classDiagram
         EMPTY
         TREASURE
         ENEMY
+        WALL
     }
 
     class Treasure {
@@ -164,6 +181,7 @@ classDiagram
         MAP_COLUMNS = 4
         TREASURE_ROOMS = 4
         ENEMY_ROOMS = 3
+        WALL_ROOMS = 3
         STARTING_ROOM = 0
         ANSWER_TIME_LIMIT = 20
         TIMER_REFRESH_SECONDS = 0.5
@@ -196,6 +214,71 @@ The same diagram in PlantUML is in
 
 ## Design notes
 
+### Two kinds of "next door"
+
+`Room` answers two different questions about a neighbour, and keeping them
+apart is what makes walls work at all:
+
+| Method | Question | Used by |
+| --- | --- | --- |
+| `is_adjacent_to(id)` | is there a **passage** there? | the player walks in |
+| `is_side_by_side(room)` | do the cells merely **touch**? | the player may try, and finds a wall |
+
+`is_side_by_side` takes a `Room`, not an id, because turning a room id back
+into a `(row, column)` pair needs to know how many columns the grid has.
+Only `Castle.is_side_by_side(a, b)` can do that, so it resolves both ids and
+delegates.
+
+Folding the two methods together would quietly turn every plain castle wall
+into a room the player could walk into.
+
+### Walls sit outside the tree
+
+A wall holds no passages at all, so the maze is a tree over the **walkable**
+rooms only: `walkable_room_count - 1` passages, and
+`visited_count_from(start) == walkable_room_count`. Walls are therefore
+*not* reachable by walking — they are found by bumping, which is why
+`Game._bump_into_wall()` is its own method and not a branch of `move_to()`.
+
+Because walls are raised **before** the depth-first search runs, the search
+simply never considers them. Raising them afterwards and then deleting the
+passages would also work, but it would mean building passages and then
+tearing them out.
+
+### Placing a wall can break the castle, so each one is checked
+
+A line of walls can split a 4x4 grid in two, and the search only reaches the
+piece holding the starting room. A treasure in the other piece makes the run
+unwinnable — measured over random castles, that broke **15% of them**. So
+`_choose_walls()` raises one wall at a time and asks two questions before
+keeping it:
+
+- `_walkable_area_is_connected()` — no room is stranded;
+- `_every_wall_can_be_bumped()` — no wall is ringed by other walls, which
+  would make it content the player can never reach.
+
+A candidate that fails either is reverted with `place_empty()` and the next
+one is tried. `place_wall()` / `place_empty()` exist as a matched pair
+purely so that revert is a real operation rather than poking at `_type`.
+
+### `RoomType.WALL` is not "empty"
+
+`EMPTY` means "walkable, nothing here". `WALL` means "solid stone here":
+never walkable, never holds treasure or an enemy, excluded from the maze.
+That is why `_refresh_type()` returns early on a wall — a wall is not a
+container, so recomputing its type from its contents would be meaningless
+and would quietly turn it back into an empty room on the next swap.
+
+### Fog of war lives on the room
+
+`Room._discovered` starts `False` and only `Game` ever calls `discover()`.
+Storing it on the room rather than in a set inside `Game` means `Room.icon`
+can answer "what should the map draw?" on its own, with no knowledge of the
+player, and the fog cannot be bypassed by forgetting to check a global.
+
+The check is the **first** thing `icon` does, before the treasure and enemy
+branches. Anything else would let an unexplored room leak what it holds.
+
 ### Links are stored as ids, not as objects
 
 `Room._connections` is a list of `int`, and so is `Player._position`.
@@ -211,9 +294,7 @@ Both are attached to a room with an **optional** aggregation (`o--`,
 back to `RoomType.EMPTY`, which is why `_refresh_type()` recomputes the
 type from whatever the room currently holds. This is the rule that keeps
 the map honest: a room you have already solved shows as `EMPTY`, never as
-a solved treasure or a defeated enemy.
-
-### Only `Game` is allowed to change health or gold
+a solved treasure or a defeated enemy.### Only `Game` is allowed to change health or gold
 
 `Player` has `take_damage()` and `gain_gold()`, but no other class calls
 them. `Game` is the referee, so there is exactly one place to look when
