@@ -1,0 +1,210 @@
+@startuml
+'
+' Castle Adventure -- class diagram (PlantUML version)
+'
+' The Mermaid version in class-diagram.md is the source of truth for
+' this project. This file holds the same diagram in PlantUML, so it can
+' be rendered as an image: paste it into https://www.plantuml.com/plantuml,
+' or run PlantUML locally on this file.
+'
+' A «static» method has the {static} tag. The diamond (o) filled
+' composition is *--, the hollow one (o) aggregation is o--, and
+' ..> is a "uses a constant from" dependency.
+
+hide empty members
+skinparam classAttributeIconSize 0
+skinparam shadowing false
+
+title Castle Adventure -- class diagram
+
+' --- Enumerations ---------------------------------------------------
+
+enum GameState {
+    PLAYING
+    VICTORY
+    DEFEAT
+}
+
+enum RoomType {
+    EMPTY
+    TREASURE
+    ENEMY
+}
+
+' --- Constants ------------------------------------------------------
+
+class "Config" as Config <<namespace>> {
+    STARTING_HEALTH = 20
+    ENEMY_DAMAGE = 5
+    GOLD_PER_ENEMY = 10
+    GOLD_GOAL = 60
+    TREASURE_GOLD_MIN = 20
+    TREASURE_GOLD_MAX = 40
+    MAP_ROWS = 4
+    MAP_COLUMNS = 4
+    TREASURE_ROOMS = 4
+    ENEMY_ROOMS = 3
+    STARTING_ROOM = 0
+    ANSWER_TIME_LIMIT = 20
+    TIMER_REFRESH_SECONDS = 0.5
+}
+
+' --- The engine -----------------------------------------------------
+
+class Game {
+    - _player : Player
+    - _castle : Castle
+    - _state : GameState
+    - _in_combat : bool
+    - _deadline : float
+    - _log : list~str~
+    - _rooms_visited : int
+    - _enemies_defeated : int
+    + __init__(castle = None)
+    + new_game() {static} : Game
+    + player() : Player
+    + castle() : Castle
+    + state() : GameState
+    + in_combat() : bool
+    + log() : list~str~
+    + rooms_visited() : int
+    + enemies_defeated() : int
+    + current_room() : Room
+    + can_move() : bool
+    + time_remaining() : float
+    + move_to(room_id) : str
+    + submit_answer(answer) : str
+    + register_timeout() : str
+    - _resolve_room() : str
+    - _start_combat(enemy) : str
+    - _defeat_enemy(enemy) : str
+    - _check_victory() : void
+    - _log_message(message) : void
+}
+
+' --- The models -----------------------------------------------------
+
+class Player {
+    - _name : str
+    - _health : int
+    - _gold : int
+    - _position : int
+    + __init__(name)
+    + name() : str
+    + health() : int
+    + gold() : int
+    + position() : int
+    + take_damage(amount) : void
+    + gain_gold(amount) : void
+    + move_to(room_id) : void
+    + is_alive() : bool
+    + has_enough_gold() : bool
+}
+
+class Castle {
+    - _rows : int
+    - _columns : int
+    - _rooms : dict
+    + __init__(rows, columns)
+    + rows() : int
+    + columns() : int
+    + room_count() : int
+    + rooms() : list~Room~
+    + room_ids() : list~int~
+    + generate_random() {static} : Castle
+    + id_at(row, column) : int
+    + get_room(room_id) : Room
+    + has_room(room_id) : bool
+    + neighbours_of(room_id) : list~int~
+    + visited_count_from(start_id) : int
+    - _build_maze() : void
+    - _unvisited_neighbours(room_id, visited) : list~int~
+    - _deal_contents() : void
+    - _empty_the_starting_room() : void
+}
+
+class Room {
+    - _id : int
+    - _row : int
+    - _column : int
+    - _type : RoomType
+    - _connections : list~int~
+    - _treasure : Treasure
+    - _enemy : Enemy
+    + __init__(room_id, row, column)
+    + room_id() : int
+    + row() : int
+    + column() : int
+    + type() : RoomType
+    + treasure() : Treasure
+    + enemy() : Enemy
+    + icon() : str
+    + has_treasure() : bool
+    + has_live_enemy() : bool
+    + place_treasure() : void
+    + place_enemy() : void
+    + remove_treasure() : void
+    + remove_enemy() : void
+    + swap_contents_with(other) : void
+    + connect_to(other_id) : void
+    + is_adjacent_to(other_id) : bool
+    + connections() : list~int~
+    - _refresh_type() : void
+}
+
+class Treasure {
+    - _gold : int
+    + __init__(gold)
+    + create_random() {static} : Treasure
+    + amount() : int
+}
+
+class Enemy {
+    - _name : str
+    - _damage : int
+    - _is_defeated : bool
+    - _question : MathOperation
+    + __init__(name, damage)
+    + create_random() {static} : Enemy
+    + name() : str
+    + damage() : int
+    + question() : MathOperation
+    + pose_question() : MathOperation
+    + defeat() : void
+    + is_defeated() : bool
+}
+
+class MathOperation {
+    - _first : int
+    - _second : int
+    - _operator : str
+    - _result : int
+    + __init__(first, second, operator, result)
+    + create_random() {static} : MathOperation
+    + text() : str
+    + is_correct(answer) : bool
+}
+
+' --- Relationships --------------------------------------------------
+
+Game "1" *-- "1" Player : _player
+Game "1" *-- "1" Castle : _castle
+Game --> "1" GameState : _state
+
+Castle "1" *-- "0..16" Room : _rooms
+
+Room --> "1" RoomType : _type
+Room o-- "0..1" Treasure : _treasure
+Room o-- "0..1" Enemy : _enemy
+Room --> "0..4" Room : _connections (ids)
+
+Enemy "1" *-- "0..1" MathOperation : _question
+
+Player ..> Config
+Castle ..> Config
+Room ..> Config
+Enemy ..> Config
+Treasure ..> Config
+MathOperation ..> Config
+
+@enduml
